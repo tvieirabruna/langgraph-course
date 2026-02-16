@@ -1,45 +1,71 @@
-from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
-from langgraph.graph import END, MessagesState, StateGraph
+from typing import TypedDict, Annotated
 
-from nodes import run_agent_reasoning, tool_node
+from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
+
+from chains import reflection_chain, generate_chain
+
+from dotenv import load_dotenv
 
 load_dotenv()
 
-AGENT_REASON = "agent_reason"
-ACT = "act"
-LAST = -1
+
+class MessageGraph(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
 
 
-def should_continue(state: MessagesState) -> str:
-    if not state["messages"][LAST].tool_calls:
+REFLECT = "reflect"
+GENERATE = "generate"
+
+
+def generation_node(state: MessageGraph) -> dict:
+    return {"messages": [generate_chain.invoke({"messages": state["messages"]})]}
+
+
+def reflection_node(state: MessageGraph) -> dict:
+    res = reflection_chain.invoke({"messages": state["messages"]})
+    return {"messages": [HumanMessage(content=res.content)]}
+
+
+def should_continue(state: MessageGraph) -> str:
+    if len(state["messages"]) >= 6:
         return END
-    return ACT
+    return REFLECT
+    
 
+builder = StateGraph(state_schema=MessageGraph)
 
-flow = StateGraph(MessagesState)
+builder.add_node(GENERATE, generation_node)
+builder.add_node(REFLECT, reflection_node)
 
-flow.add_node(AGENT_REASON, run_agent_reasoning)
-flow.set_entry_point(AGENT_REASON)
-flow.add_node(ACT, tool_node)
+builder.set_entry_point(GENERATE)
 
-flow.add_conditional_edges(AGENT_REASON, should_continue, {END: END, ACT: ACT})
-flow.add_edge(ACT, AGENT_REASON)
+builder.add_conditional_edges(GENERATE, should_continue, path_map={END: END, REFLECT: REFLECT})
+builder.add_edge(REFLECT, GENERATE)
 
-app = flow.compile()
-app.get_graph().draw_mermaid_png(output_file_path="flow.png")
+graph = builder.compile()
+graph.get_graph().draw_mermaid_png(output_file_path="flow.png")
+print(graph.get_graph().draw_mermaid())
+graph.get_graph().print_ascii()
 
 
 def main():
-    print("Hello to ReAct LangGraph with Function Calling!")
-    res = app.invoke(
-        {
-            "messages": HumanMessage(
-                content="What is the weather in Tokyo? List it and then triple it."
-            )
-        }
-    )
-    print(res["messages"][LAST].content)
+    print("Hello, Reflection Agent!")
+    inputs = {
+        "messages": [
+            HumanMessage(content="""Make this tweet better:
+                          @LangChainAI
+                          - newly Tool Calling feature is serioulsy underrated.
+                          
+                          After a long wait, it's here - making the implementation of agents accross different models with function calling.
+                          
+                          Made a video covering their newest blog post.
+                          """)
+        ]
+    }
+    res = graph.invoke(inputs)
+    print(res)
 
 
 if __name__ == "__main__":
