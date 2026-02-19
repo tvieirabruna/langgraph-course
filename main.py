@@ -1,6 +1,6 @@
 from typing import TypedDict, Annotated
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import AnyMessage, BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
@@ -11,8 +11,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-class MessageGraph(TypedDict):
-    messages: Annotated[list[BaseMessage], add_messages]
+class MessageGraph(StateGraph):
+    """A StateGraph where every node
+    - receives a list of messages as input
+    - returns one or more messages as a output.
+    """
+    def __init__(self) -> None:
+        super.__init__(Annotated[list[AnyMessage], add_messages])
 
 
 REFLECT = "reflect"
