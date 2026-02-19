@@ -1,53 +1,46 @@
-from typing import TypedDict, Annotated
+from typing import Literal
 
-from langchain_core.messages import AnyMessage, BaseMessage, HumanMessage
-from langgraph.graph import END, StateGraph
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.graph import END, START, StateGraph, MessagesState
 from langgraph.graph.message import add_messages
 
-from chains import reflection_chain, generate_chain
-
-from dotenv import load_dotenv
-
-load_dotenv()
+from chains import revisor, first_responder
+from tool_executor import execute_tools
 
 
-class MessageGraph(StateGraph):
-    """A StateGraph where every node
-    - receives a list of messages as input
-    - returns one or more messages as a output.
-    """
-    def __init__(self) -> None:
-        super.__init__(Annotated[list[AnyMessage], add_messages])
+MAX_ITERATIONS = 2
 
 
-REFLECT = "reflect"
-GENERATE = "generate"
+def draft_node(state: MessagesState):
+    """Draft the initial response."""
+    response = first_responder.invoke({"messages": state["messages"]})
+    return {"messages": [response]}
 
+def revise_node(state: MessagesState):
+    """Revise the answer based on tool results."""
+    response = revisor.invoke({"messages": state["messages"]})
+    return {"messages": [response]}
 
-def generation_node(state: MessageGraph) -> dict:
-    return {"messages": [generate_chain.invoke({"messages": state["messages"]})]}
-
-
-def reflection_node(state: MessageGraph) -> dict:
-    res = reflection_chain.invoke({"messages": state["messages"]})
-    return {"messages": [HumanMessage(content=res.content)]}
-
-
-def should_continue(state: MessageGraph) -> str:
-    if len(state["messages"]) >= 6:
+def event_loop(state: MessagesState)  -> Literal["execute_tools", END]:
+    """Determine whether to continue or end based on iteration count."""
+    count_tool_visits = sum(
+        isinstance(item, ToolMessage) for item in state["messages"]
+    )
+    if count_tool_visits > MAX_ITERATIONS:
         return END
-    return REFLECT
-    
+    return "execute_tools"    
 
-builder = StateGraph(state_schema=MessageGraph)
+builder = StateGraph(MessagesState)
 
-builder.add_node(GENERATE, generation_node)
-builder.add_node(REFLECT, reflection_node)
+builder.add_node("draft", draft_node)
+builder.add_node("execute_tools", execute_tools)
+builder.add_node("revise", revise_node)
 
-builder.set_entry_point(GENERATE)
+builder.add_edge(START, "draft")
+builder.add_edge("draft", "execute_tools")
+builder.add_edge("execute_tools", "revise")
 
-builder.add_conditional_edges(GENERATE, should_continue, path_map={END: END, REFLECT: REFLECT})
-builder.add_edge(REFLECT, GENERATE)
+builder.add_conditional_edges("revise", event_loop, ["execute_tools", END])
 
 graph = builder.compile()
 graph.get_graph().draw_mermaid_png(output_file_path="flow.png")
@@ -56,22 +49,23 @@ graph.get_graph().print_ascii()
 
 
 def main():
-    print("Hello, Reflection Agent!")
-    inputs = {
+    print("Hello, Reflexion Agent!")
+    res = graph.invoke(
+    {
         "messages": [
-            HumanMessage(content="""Make this tweet better:
-                          @LangChainAI
-                          - newly Tool Calling feature is serioulsy underrated.
-                          
-                          After a long wait, it's here - making the implementation of agents accross different models with function calling.
-                          
-                          Made a video covering their newest blog post.
-                          """)
+            {
+                "role": "user",
+                "content": "Write about AI-Powered SOC / autonomous soc problem domain, list startups that do that and raised capital.",
+            }
         ]
     }
-    res = graph.invoke(inputs)
+    )
+    # Extract the final answer from the last message with tool calls
+    last_message = res["messages"][-1]
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        print(last_message.tool_calls[0]["args"]["answer"])
     print(res)
-
+    
 
 if __name__ == "__main__":
     main()

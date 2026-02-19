@@ -38,12 +38,12 @@ actor_prompt_template = ChatPromptTemplate.from_messages(
     time=lambda: datetime.datetime.now().isoformat(),
 )
 
-first_reponder_prompt_template = actor_prompt_template.partial(
+first_responder_prompt_template = actor_prompt_template.partial(
     first_instruction="Provide a detailed ~250 word answer."
 )
 
 
-first_reponder = first_reponder_prompt_template | llm.bind_tools(
+first_responder = first_responder_prompt_template | llm.bind_tools(
     tools=[AnswerQuestion], tool_choice="AnswerQuestion"
 )
 
